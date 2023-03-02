@@ -6,6 +6,8 @@
 
 #include "threaded_decoder.h"
 
+#include <random>
+#include <math.h>
 #include <dmlc/logging.h>
 
 namespace decord {
@@ -14,26 +16,191 @@ namespace ffmpeg {
 FFMPEGThreadedDecoder::FFMPEGThreadedDecoder() : frame_count_(0), draining_(false), run_(false), error_status_(false), error_message_() {
 }
 
-void FFMPEGThreadedDecoder::SetCodecContext(AVCodecContext *dec_ctx, int width, int height, int rotation) {
+void FFMPEGThreadedDecoder::SetCodecContext(AVCodecContext *dec_ctx, int width, int height, int rotation,
+                                            bool use_rrc, int orig_width, int orig_height, double scale_min, double scale_max, double ratio_min, double ratio_max,
+                                            bool use_msc,
+                                            bool use_rcc,
+                                            bool use_centercrop,
+                                            bool use_fixedcrop, int crop_x, int crop_y,
+                                            double hflip_prob, double vflip_prob) {
     bool running = run_.load();
     Clear();
     dec_ctx_.reset(dec_ctx);
     // LOG(INFO) << dec_ctx->width << " x " << dec_ctx->height << " : " << dec_ctx->time_base.num << " , " << dec_ctx->time_base.den;
     // std::string descr = "scale=320:240";
     char descr[128];
-    switch(rotation) {
-        case 90:
-            std::snprintf(descr, sizeof(descr), "transpose=1,scale=%d:%d", width, height);
-            break;
-        case 180:
-            std::snprintf(descr, sizeof(descr), "transpose=1,transpose=1,scale=%d:%d", width, height);
-            break;
-        case 270:
-            std::snprintf(descr, sizeof(descr), "transpose=2,scale=%d:%d", width, height);
-            break;
-        case 0:
-        default:
-            std::snprintf(descr, sizeof(descr), "scale=%d:%d", width, height);
+    int cx;
+    // determine if we need to do hflip (vflip)
+    std::random_device rd;
+    std::mt19937_64 generator(rd());
+    std::uniform_real_distribution<double> hflip_sampler(0, 1);
+    std::uniform_real_distribution<double> vflip_sampler(0, 1);
+    bool hflip = false;
+    bool vflip = false;
+    // double t1 = hflip_sampler(generator);
+    // double t2 = vflip_sampler(generator);
+    // LOG(INFO) << "t1: " << t1 << "; t2: " << t2;
+    if ((hflip_prob > 0.) && (hflip_sampler(generator) < hflip_prob)) {
+        hflip = true;
+    }
+    if ((vflip_prob > 0.) && (vflip_sampler(generator) < vflip_prob)) {
+        vflip = true;
+    }
+    if (use_rrc) {
+        int area = orig_width * orig_height;
+        double log_ratio_min = log(ratio_min);
+        double log_ratio_max = log(ratio_max);
+        int out_w = -1;
+        int out_h = -1;
+        int x = -1;
+        int y = -1;
+        std::uniform_real_distribution<double> scale_sampler(scale_min, scale_max);
+        std::uniform_real_distribution<double> ratio_sampler(log_ratio_min, log_ratio_max);
+        bool success = false;
+        for (int i = 0; (i < 10) && (!success); ++i) {
+            double target_area = area * scale_sampler(generator);
+            double aspect_ratio = exp(ratio_sampler(generator));
+            out_w = int(round(sqrt(target_area * aspect_ratio)));
+            out_h = int(round(sqrt(target_area / aspect_ratio)));
+            if ((out_w > 0) && (out_w <= orig_width) && (out_h > 0) && (out_h <= orig_height)) {
+                std::uniform_int_distribution<> y_sampler(0, orig_height - out_h + 1);
+                std::uniform_int_distribution<> x_sampler(0, orig_width - out_w + 1);
+                y = y_sampler(generator);
+                x = x_sampler(generator);
+                success = true;
+            }
+        }
+        if (!success) {
+            // Fallback to central crop
+            double in_ratio = double(orig_width) / double(orig_height);
+            if (in_ratio < ratio_min) {
+                out_w = orig_width;
+                out_h = int(round(out_w / ratio_min));
+            } else if (in_ratio > ratio_max) {
+                out_h = orig_height;
+                out_w = int(round(out_h * ratio_max));
+            } else {
+                out_h = orig_height;
+                out_w = orig_width;
+            }
+            y = (orig_height - out_h) / 2;
+            x = (orig_width - out_w) / 2;
+        }
+        if (rotation != 0) {
+            LOG(FATAL) << "rotation != 0 is not supported for RRC!";
+        } else {
+            cx = std::snprintf(descr, sizeof(descr), "crop=%d:%d:%d:%d,%s%sscale=%d:%d", out_w, out_h, x, y, hflip ? "hflip," : "", vflip ? "vflip," : "", width, height);
+        }
+    } else if (use_msc) {
+        // find a crop size
+        int base_size = (orig_height > orig_width) ? orig_width : orig_height;
+        int max_distort = 1;
+        std::vector<float> scales = {1., 0.875, 0.75, 0.66};
+        std::vector<std::tuple<int, int>> crop_pairs;
+        for (int i = 0; i < scales.size(); i++) {
+            for (int j = 0; j < scales.size(); j++) {
+                if (abs(i - j) <= max_distort) {
+                    int crop_h = int(base_size * scales[i]);
+                    if (abs(crop_h - height) < 3) crop_h = height;
+                    int crop_w = int(base_size * scales[j]);
+                    if (abs(crop_w - width) < 3) crop_w = width;
+                    crop_pairs.push_back(std::tuple<int, int>(crop_w, crop_h));
+                }
+            }
+        }
+        std::uniform_int_distribution<> crop_pair_sampler(0, crop_pairs.size() - 1);
+        std::tuple<int, int> crop_pair = crop_pairs[crop_pair_sampler(generator)];
+        int out_w = std::get<0>(crop_pair);
+        int out_h = std::get<1>(crop_pair);
+        // fill_fix_offset
+        int w_step = (orig_width - out_w) / 4;
+        int h_step = (orig_height - out_h) / 4;
+        std::vector<std::tuple<int, int>> offsets;
+        offsets.push_back(std::make_tuple(0, 0));                    // upper left
+        offsets.push_back(std::make_tuple(4 * w_step, 0));           // upper right
+        offsets.push_back(std::make_tuple(0, 4 * h_step));           // lower left
+        offsets.push_back(std::make_tuple(4 * w_step, 4 * h_step));  // lower right
+        offsets.push_back(std::make_tuple(2 * w_step, 2 * h_step));  // center
+        
+        offsets.push_back(std::make_tuple(2 * w_step, 0));           // upper center
+        offsets.push_back(std::make_tuple(0, 2 * h_step));           // center left
+        offsets.push_back(std::make_tuple(2 * w_step, 4 * h_step));  // lower center
+        offsets.push_back(std::make_tuple(4 * w_step, 2 * h_step));  // center right
+
+        offsets.push_back(std::make_tuple(1 * w_step, 1 * h_step));  // upper left quarter
+        offsets.push_back(std::make_tuple(3 * w_step, 1 * h_step));  // upper right quater
+        offsets.push_back(std::make_tuple(1 * w_step, 3 * h_step));  // lower left quarter
+        offsets.push_back(std::make_tuple(3 * w_step, 3 * h_step));  // lower right quarter
+        std::uniform_int_distribution<> offset_sampler(0, offsets.size() - 1);
+        std::tuple<int, int> offset = offsets[offset_sampler(generator)];
+        int x = std::get<0>(offset);
+        int y = std::get<1>(offset);
+    
+        // LOG(INFO) << "crop_w: " << out_w << "; crop_h: " << out_h << "; x: " << x << "; y: " << y;
+        if (rotation != 0) {
+            LOG(FATAL) << "rotation != 0 is not supported for RRC!";
+        } else {
+            cx = std::snprintf(descr, sizeof(descr), "crop=%d:%d:%d:%d,%s%sscale=%d:%d", out_w, out_h, x, y, hflip ? "hflip," : "", vflip ? "vflip," : "", width, height);
+        }
+    } else if (use_rcc) {
+        int crop_size = (orig_height > orig_width) ? orig_width : orig_height;
+        int y = (orig_height - crop_size) / 2;
+        int x = (orig_width - crop_size) / 2;
+        if (hflip || vflip) {
+            LOG(FATAL) << "hflip_prob > 0 or vflip_prob > 0 is not supported for CenterCrop!";
+        }
+        if (rotation != 0) {
+            LOG(FATAL) << "rotation != 0 is not supported for CenterCrop!";
+        } else {
+            cx = std::snprintf(descr, sizeof(descr), "crop=%d:%d:%d:%d,scale=%d:%d", crop_size, crop_size, x, y, width, height);
+        }
+    } else if (use_fixedcrop) {
+        if (hflip || vflip) {
+            LOG(FATAL) << "hflip_prob > 0 or vflip_prob > 0 is not supported for FixedCrop!";
+        }
+        if (rotation != 0) {
+            LOG(FATAL) << "rotation != 0 is not supported for FixedCrop!";
+        } else {
+            cx = std::snprintf(descr, sizeof(descr), "crop=%d:%d:%d:%d,%s%sscale=%d:%d", width, height, crop_x, crop_y, hflip ? "hflip," : "", vflip ? "vflip," : "", width, height);
+        }        
+    } else if (use_centercrop) {
+        if ((width > orig_width) || (height > orig_height)) {
+            LOG(FATAL) << "Width or height in too short in CenterCrop";
+        }
+        int y = (orig_height - height) / 2;
+        int x = (orig_width - width) / 2;
+        if (hflip || vflip) {
+            LOG(FATAL) << "hflip_prob > 0 or vflip_prob > 0 is not supported for CenterCrop!";
+        }
+        if (rotation != 0) {
+            LOG(FATAL) << "rotation != 0 is not supported for CenterCrop!";
+        } else {
+            cx = std::snprintf(descr, sizeof(descr), "crop=%d:%d:%d:%d,scale=%d:%d", width, height, x, y, width, height);
+        }
+    } else if (use_fixedcrop) {
+        if (hflip || vflip) {
+            LOG(FATAL) << "hflip_prob > 0 or vflip_prob > 0 is not supported for FixedCrop!";
+        }
+        if (rotation != 0) {
+            LOG(FATAL) << "rotation != 0 is not supported for FixedCrop!";
+        } else {
+            cx = std::snprintf(descr, sizeof(descr), "crop=%d:%d:%d:%d,scale=%d:%d", width, height, crop_x, crop_y, width, height);
+        }
+    } else {
+        switch(rotation) {
+            case 90:
+                cx = std::snprintf(descr, sizeof(descr), "transpose=1,scale=%d:%d", width, height);
+                break;
+            case 180:
+                cx = std::snprintf(descr, sizeof(descr), "transpose=1,transpose=1,scale=%d:%d", width, height);
+                break;
+            case 270:
+                cx = std::snprintf(descr, sizeof(descr), "transpose=2,scale=%d:%d", width, height);
+                break;
+            case 0:
+            default:
+                cx = std::snprintf(descr, sizeof(descr), "scale=%d:%d", width, height);
+        }
     }
     filter_graph_ = FFMPEGFilterGraphPtr(new FFMPEGFilterGraph(descr, dec_ctx_.get()));
     if (running) {

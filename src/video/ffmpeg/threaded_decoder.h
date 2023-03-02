@@ -32,7 +32,15 @@ class FFMPEGThreadedDecoder final : public ThreadedDecoderInterface {
     public:
         FFMPEGThreadedDecoder();
         void SetCodecContext(AVCodecContext *dec_ctx, int width = -1, int height = -1,
-                             int rotation = 0);
+                             int rotation = 0, bool use_rrc = false,
+                             int orig_width = 224, int orig_height = 224,
+                             double scale_min = 0.08, double scale_max = 1.,
+                             double ratio_min = 0.75, double ratio_max = 4./3,
+                             bool use_msc = false,
+                             bool use_rcc = false,
+                             bool use_centercrop = false,
+                             bool use_fixedcrop = false, int crop_x = 0, int crop_y = 0,
+                             double hflip_prob = 0., double vflip_prob = 0.);
         void Start();
         void Stop();
         void Clear();

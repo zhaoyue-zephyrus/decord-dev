@@ -35,7 +35,15 @@ class VideoReader : public VideoReaderInterface {
     using NDArray = runtime::NDArray;
     public:
         VideoReader(std::string fn, DLContext ctx, int width=-1, int height=-1,
-                    int nb_thread=0, int io_type=kNormal, std::string fault_tol="-1");
+                    int nb_thread=0, int io_type=kNormal, std::string fault_tol="-1",
+                    bool use_rrc=false,
+                    double scale_min=0.08, double scale_max=1.,
+                    double ratio_min=0.75, double ratio_max=4./3,
+                    bool use_msc=false,
+                    bool use_rcc=false,
+                    bool use_centercrop=false,
+                    bool use_fixedcrop=false, int crop_x=0, int crop_y=0,
+                    double hflip_prob=0., double vflip_prob=0.);
         /*! \brief Destructor, note that FFMPEG resources has to be managed manually to avoid resource leak */
         ~VideoReader();
         void SetVideoStream(int stream_nb = -1);
@@ -93,6 +101,24 @@ class VideoReader : public VideoReaderInterface {
         std::unordered_set<int64_t> failed_idx_;  // idx of failed frames(recovered from other frames)
         int64_t fault_tol_thresh_;  // fault tolerance threshold, raise if recovered frames retrieved exceeds thresh
         bool fault_warn_emit_;  // whether a fault warning has been emitted
+
+        bool use_rrc_;
+        double scale_min_;
+        double scale_max_;
+        double ratio_min_;
+        double ratio_max_;
+
+        bool use_msc_;
+        bool use_rcc_;
+
+        bool use_centercrop_;
+
+        bool use_fixedcrop_;
+        int crop_x_;
+        int crop_y_;
+
+        double hflip_prob_;
+        double vflip_prob_;
 };  // class VideoReader
 }  // namespace decord
 #endif  // DECORD_VIDEO_VIDEO_READER_H_

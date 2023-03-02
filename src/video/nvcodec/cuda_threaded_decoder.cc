@@ -96,8 +96,17 @@ void CUThreadedDecoder::InitBitStreamFilter(AVCodecParameters *codecpar, AVInput
     bsf_ctx_.reset(bsf_ctx);
 }
 
-void CUThreadedDecoder::SetCodecContext(AVCodecContext *dec_ctx, int width, int height, int rotation) {
+void CUThreadedDecoder::SetCodecContext(AVCodecContext *dec_ctx, int width, int height, int rotation,
+                                        bool use_rrc, int orig_width, int orig_height, double scale_min, double scale_max, double ratio_min, double ratio_max,
+                                        bool use_msc,
+                                        bool use_rcc,
+                                        bool use_centercrop,
+                                        bool use_fixedcrop, int crop_x, int crop_y,
+                                        double hflip_prob, double vflip_prob) {
     CHECK(dec_ctx);
+    if (use_rrc || use_msc | use_rcc || use_centercrop || use_fixedcrop) {
+        LOG(FATAL) << "RandomResizedCrop, MultiScaleCrop, ResizeCenterCrop, CenterCrop, and FixedCrop is currently not supported in cuda decoder!";
+    }
     width_ = width;
     height_ = height;
     bool running = run_.load();

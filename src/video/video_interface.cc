@@ -18,9 +18,17 @@
 namespace decord {
 
 VideoReaderPtr GetVideoReader(std::string fn, DLContext ctx, int width, int height, int nb_thread,
-                              int io_type, std::string fault_tol) {
+                              int io_type, std::string fault_tol,
+                              bool use_rrc, double scale_min, double scale_max, double ratio_min, double ratio_max,
+                              bool use_centercrop,
+                              bool use_fixedcrop, int crop_x, int crop_y,
+                              double hflip_prob, double vflip_prob) {
     std::shared_ptr<VideoReaderInterface> ptr;
-    ptr = std::make_shared<VideoReader>(fn, ctx, width, height, nb_thread, io_type, fault_tol);
+    ptr = std::make_shared<VideoReader>(fn, ctx, width, height, nb_thread, io_type, fault_tol,
+                                        use_rrc, scale_min, scale_max, ratio_min, ratio_max,
+                                        use_centercrop,
+                                        use_fixedcrop, crop_x, crop_y,
+                                        hflip_prob, vflip_prob);
     return ptr;
 }
 
@@ -35,10 +43,29 @@ DECORD_REGISTER_GLOBAL("video_reader._CAPI_VideoReaderGetVideoReader")
     int num_thread = args[5];
     int io_type = args[6];
     std::string fault_tol = args[7];
+    bool use_rrc = args[8];
+    double scale_min = args[9];
+    double scale_max = args[10];
+    double ratio_min = args[11];
+    double ratio_max = args[12];
+    bool use_msc = args[13];
+    bool use_rcc = args[14];
+    bool use_centercrop = args[15];
+    bool use_fixedcrop = args[16];
+    int crop_x = args[17];
+    int crop_y = args[18];
+    double hflip_prob = args[19];
+    double vflip_prob = args[20];
     DLContext ctx;
     ctx.device_type = static_cast<DLDeviceType>(device_type);
     ctx.device_id = device_id;
-    auto reader = new VideoReader(fn, ctx, width, height, num_thread, io_type, fault_tol);
+    auto reader = new VideoReader(fn, ctx, width, height, num_thread, io_type, fault_tol,
+                                  use_rrc, scale_min, scale_max, ratio_min, ratio_max,
+                                  use_msc,
+                                  use_rcc,
+                                  use_centercrop,
+                                  use_fixedcrop, crop_x, crop_y,
+                                  hflip_prob, vflip_prob);
     if (reader->GetFrameCount() <= 0) {
       *rv = nullptr;
       return;

@@ -41,18 +41,44 @@ class VideoReader(object):
 
 
     """
-    def __init__(self, uri, ctx=cpu(0), width=-1, height=-1, num_threads=0, fault_tol=-1):
+    def __init__(self, uri, ctx=cpu(0), width=-1, height=-1, num_threads=0, fault_tol=-1,
+                 use_rrc=0, scale_min=0.08, scale_max=1, ratio_min=0.75, ratio_max=4./3,
+                 use_msc=0,
+                 use_rcc=0,
+                 use_centercrop=0,
+                 use_fixedcrop=0, crop_x=0, crop_y=0,
+                 hflip_prob=0., vflip_prob=0.):
         self._handle = None
         assert isinstance(ctx, DECORDContext)
         fault_tol = str(fault_tol)
+        assert use_rrc + use_msc + use_rcc + use_centercrop + use_fixedcrop <= 1, "At most one crop is accepted"
+        assert 0 <= hflip_prob <= 1.0, "hflip_prob should be in the range of [0.0, 1.0]"
+        assert 0 <= vflip_prob <= 1.0, "vflip_prob should be in the range of [0.0, 1.0]"
+        if use_rcc or use_centercrop or use_fixedcrop:
+            assert hflip_prob == 0, "hflip_prob should be equal to 0. when using ResizedCenterCrop or CenterCrop or FixedCrop"
+            assert vflip_prob == 0, "vflip_prob should be equal to 0. when using ResizedCenterCrop or CenterCrop or FixedCrop"
         if hasattr(uri, 'read'):
             ba = bytearray(uri.read())
             uri = '{} bytes'.format(len(ba))
             self._handle = _CAPI_VideoReaderGetVideoReader(
-                ba, ctx.device_type, ctx.device_id, width, height, num_threads, 2, fault_tol)
+                ba, ctx.device_type, ctx.device_id, width, height, num_threads, 2, fault_tol,
+                use_rrc, scale_min, scale_max, ratio_min, ratio_max,
+                use_msc,
+                use_rcc,
+                use_centercrop,
+                use_fixedcrop, crop_x, crop_y,
+                hflip_prob, vflip_prob,
+            )
         else:
             self._handle = _CAPI_VideoReaderGetVideoReader(
-                uri, ctx.device_type, ctx.device_id, width, height, num_threads, 0, fault_tol)
+                uri, ctx.device_type, ctx.device_id, width, height, num_threads, 0, fault_tol,
+                use_rrc, scale_min, scale_max, ratio_min, ratio_max,
+                use_msc,
+                use_rcc,
+                use_centercrop,
+                use_fixedcrop, crop_x, crop_y,
+                hflip_prob, vflip_prob,
+            )
         if self._handle is None:
             raise RuntimeError("Error reading " + uri + "...")
         self._num_frame = _CAPI_VideoReaderGetFrameCount(self._handle)

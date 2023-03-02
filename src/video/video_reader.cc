@@ -31,11 +31,23 @@ static const int EOF_RETRY_MAX = std::stoi(runtime::GetEnvironmentVariableOrDefa
 // (corrupted video only): The warning threshold(0.0 - 1.0) when multiple frames are unavailable and fallbacked to cached frames
 static const float DUPLICATE_WARNING_THRESHOLD = std::stof(runtime::GetEnvironmentVariableOrDefault("DECORD_DUPLICATE_WARNING_THRESHOLD", "0.25"));
 
-VideoReader::VideoReader(std::string fn, DLContext ctx, int width, int height, int nb_thread, int io_type, std::string fault_tol)
+VideoReader::VideoReader(std::string fn, DLContext ctx, int width, int height, int nb_thread, int io_type, std::string fault_tol,
+                         bool use_rrc, double scale_min, double scale_max, double ratio_min, double ratio_max,
+                         bool use_msc,
+                         bool use_rcc,
+                         bool use_centercrop,
+                         bool use_fixedcrop, int crop_x, int crop_y,
+                         double hflip_prob, double vflip_prob)
      : ctx_(ctx), key_indices_(), pts_frame_map_(), tmp_key_frame_(), overrun_(false), frame_ts_(), codecs_(),
      actv_stm_idx_(-1), fmt_ctx_(nullptr), decoder_(nullptr), curr_frame_(0),
      nb_thread_decoding_(nb_thread), width_(width), height_(height), eof_(false), io_ctx_(),
-     use_cached_frame_(true), fault_tol_thresh_(-1.0), fault_warn_emit_(false) {
+     use_cached_frame_(true), fault_tol_thresh_(-1.0), fault_warn_emit_(false),
+     use_rrc_(use_rrc), scale_min_(scale_min), scale_max_(scale_max), ratio_min_(ratio_min), ratio_max_(ratio_max),
+     use_msc_(use_msc),
+     use_rcc_(use_rcc),
+     use_centercrop_(use_centercrop),
+     use_fixedcrop_(use_fixedcrop), crop_x_(crop_x), crop_y_(crop_y),
+     hflip_prob_(hflip_prob), vflip_prob_(vflip_prob) {
     // av_register_all deprecated in latest versions
     #if ( LIBAVFORMAT_VERSION_INT < AV_VERSION_INT(58,9,100) )
     av_register_all();
@@ -202,18 +214,29 @@ void VideoReader::SetVideoStream(int stream_nb) {
         std::swap(original_width, original_height);
     }
 
-    if (width_ < 1) {
-        width_ = original_width;
-    }
-    if (height_ < 1) {
-        height_ = original_height;
+    if (use_rrc_ || use_msc_ || use_rcc_ || use_centercrop_ || use_fixedcrop_) {
+        CHECK_GT(width_, 1) << "Specify width if use RRC or or MultiScaleCrop or ResizedCenterCrop or CenterCrop or FixedCrop!";
+        CHECK_GT(height_, 1) << "Specify height if use RRC or  MultiScaleCrop or ResizedCenterCrop or CenterCrop or FixedCrop!";
+    } else {
+        if (width_ < 1) {
+            width_ = original_width;
+        }
+        if (height_ < 1) {
+            height_ = original_height;
+        }
     }
 
     if (ctx_.device_type == kDLGPU) {
         ndarray_pool_ = NDArrayPool(0, {height_, width_, 3}, kUInt8, ctx_);
     }
 
-    decoder_->SetCodecContext(dec_ctx, width_, height_, rotation);
+    decoder_->SetCodecContext(dec_ctx, width_, height_, rotation,
+                              use_rrc_, original_width, original_height, scale_min_, scale_max_, ratio_min_, ratio_max_,
+                              use_msc_,
+                              use_rcc_,
+                              use_centercrop_,
+                              use_fixedcrop_, crop_x_, crop_y_,
+                              hflip_prob_, vflip_prob_);
     IndexKeyframes();
 }
 
